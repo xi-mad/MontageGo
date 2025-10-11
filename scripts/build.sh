@@ -27,13 +27,14 @@ do
     GOOS=${PLATFORM%/*}
     GOARCH=${PLATFORM#*/}
     
-    # Set the output binary name
-    BINARY_NAME="MontageGo"
+    # Set the output binary name.
+    # The .exe suffix should be at the end of the filename for Windows.
+    BASE_BINARY_NAME="MontageGo-${GOOS}-${GOARCH}"
+    OUTPUT_NAME="$OUTPUT_DIR/$BASE_BINARY_NAME"
     if [ "$GOOS" = "windows" ]; then
-        BINARY_NAME+=".exe"
+        OUTPUT_NAME+=".exe"
     fi
     
-    OUTPUT_NAME="$OUTPUT_DIR/${BINARY_NAME}-${GOOS}-${GOARCH}"
 
     echo "Building for $GOOS/$GOARCH..."
     
