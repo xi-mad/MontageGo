@@ -1,0 +1,11 @@
+# Go build artifacts
+/MontageGo
+/MontageGo.exe
+/builds/
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
