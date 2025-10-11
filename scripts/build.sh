@@ -18,6 +18,10 @@ PLATFORMS="windows/amd64 linux/amd64 darwin/amd64 darwin/arm64"
 # Get the main package path from the current directory
 PACKAGE_PATH="./cmd/montagego"
 
+# Get the latest git tag for versioning
+GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+LDFLAGS="-ldflags=-X 'main.version=$GIT_TAG'"
+
 for PLATFORM in $PLATFORMS
 do
     # Split the platform string into OS and Architecture
@@ -35,7 +39,7 @@ do
     echo "Building for $GOOS/$GOARCH..."
     
     # Set the environment variables for cross-compilation and run the build command
-    env GOOS="$GOOS" GOARCH="$GOARCH" go build -o "$OUTPUT_NAME" "$PACKAGE_PATH"
+    env GOOS="$GOOS" GOARCH="$GOARCH" go build -o "$OUTPUT_NAME" $LDFLAGS "$PACKAGE_PATH"
     
     # Check if the build command was successful
     if [ $? -ne 0 ]; then

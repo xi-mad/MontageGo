@@ -37,6 +37,11 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// SetVersion sets the version for the root command.
+func SetVersion(version string) {
+	rootCmd.Version = version
+}
+
 func runMontage(cfg *config.Config) error {
 	// Determine the output stream for application logs.
 	logWriter := os.Stdout
@@ -85,6 +90,8 @@ func Execute() {
 }
 
 func init() {
+	// This will be called by main.go to set the version.
+	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	cfg = config.NewConfig()
 
 	// File and Path Flags
