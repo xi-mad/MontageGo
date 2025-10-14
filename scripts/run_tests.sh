@@ -50,30 +50,53 @@ echo "--- Starting MontageGo Tests ---"
 
 # --- Test Cases ---
 
-echo "\n[1/7] Testing default settings..."
-"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_1_default.jpg" --font-file "$FONT_FILE"
+echo "\n[1/13] Testing default settings..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_01_default.jpg" --font-file "$FONT_FILE"
 
-echo "\n[2/7] Testing different grid layout (2x3) with large padding and margin..."
-"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_2_layout.jpg" --font-file "$FONT_FILE" \
+echo "\n[2/13] Testing different grid layout (2x3) with large padding and margin..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_02_layout_2x3.jpg" --font-file "$FONT_FILE" \
     -c 2 -r 3 --padding 20 --margin 50
 
-echo "\n[3/7] Testing custom colors (lime text, magenta shadow, navy background)..."
-"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_3_colors.jpg" --font-file "$FONT_FILE" \
+echo "\n[3/13] Testing large grid layout (6x6)..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_03_layout_6x6.jpg" --font-file "$FONT_FILE" \
+    -c 6 -r 6 --padding 10 --margin 30
+
+echo "\n[4/13] Testing single column layout (1x8)..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_04_layout_1x8.jpg" --font-file "$FONT_FILE" \
+    -c 1 -r 8 --padding 10 --margin 15
+
+echo "\n[5/13] Testing custom colors (lime text, magenta shadow, navy background)..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_05_colors.jpg" --font-file "$FONT_FILE" \
     --font-color "lime" --shadow-color "#FF00FF" --bg-color "navy"
 
-echo "\n[4/7] Testing high JPEG quality..."
-"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_4_high_quality.jpg" --font-file "$FONT_FILE" \
+echo "\n[6/13] Testing high JPEG quality..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_06_high_quality.jpg" --font-file "$FONT_FILE" \
     --jpeg-quality 1
 
-echo "\n[5/7] Testing low JPEG quality..."
-"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_5_low_quality.jpg" --font-file "$FONT_FILE" \
+echo "\n[7/13] Testing low JPEG quality..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_07_low_quality.jpg" --font-file "$FONT_FILE" \
     --jpeg-quality 31
 
-echo "\n[6/7] Testing with no text rendering (empty font-file)..."
-"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_6_no_text.jpg" --header 0 --font-file ""
+echo "\n[8/13] Testing with no text rendering (empty font-file, no header)..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_08_no_text.jpg" --header 0 --font-file ""
 
-echo "\n[7/7] Testing output to stdout (piping to a file)..."
-"$BINARY" "$VIDEO_FILE" -o - --font-file "$FONT_FILE" > "$OUTPUT_DIR/test_7_piped.jpg"
+echo "\n[9/13] Testing small thumbnail size (320px width)..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_09_small_thumbs.jpg" --font-file "$FONT_FILE" \
+    --thumb-width 320
+
+echo "\n[10/13] Testing minimal padding and margin..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_10_minimal_spacing.jpg" --font-file "$FONT_FILE" \
+    --padding 0 --margin 5
+
+echo "\n[11/13] Testing custom header height..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_11_custom_header.jpg" --font-file "$FONT_FILE" \
+    --header 200
+
+echo "\n[12/13] Testing quiet mode (should produce no logs)..."
+"$BINARY" "$VIDEO_FILE" -o "$OUTPUT_DIR/test_12_quiet.jpg" --font-file "$FONT_FILE" --quiet
+
+echo "\n[13/13] Testing output to stdout (piping to a file)..."
+"$BINARY" "$VIDEO_FILE" -o - --font-file "$FONT_FILE" > "$OUTPUT_DIR/test_13_piped.jpg"
 
 
 # --- Completion ---
