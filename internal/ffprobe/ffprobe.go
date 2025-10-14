@@ -46,7 +46,7 @@ type ffprobeFormat struct {
 // GetVideoInfo executes ffprobe to get video metadata.
 func GetVideoInfo(path string, ffprobePath string) (*VideoInfo, error) {
 	cmd := exec.Command(ffprobePath,
-		"-v", "quiet",
+		"-v", "error",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",

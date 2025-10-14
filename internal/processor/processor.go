@@ -3,16 +3,46 @@ package processor
 import (
 	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"strconv"
-
+	"github.com/fogleman/gg"
 	"github.com/xi-mad/MontageGo/internal/ffprobe"
 	"github.com/xi-mad/MontageGo/pkg/config"
+)
+
+var (
+	colorNameToHex = map[string]string{
+		"black":     "#000000",
+		"white":     "#FFFFFF",
+		"red":       "#FF0000",
+		"lime":      "#00FF00",
+		"blue":      "#0000FF",
+		"yellow":    "#FFFF00",
+		"cyan":      "#00FFFF",
+		"magenta":   "#FF00FF",
+		"silver":    "#C0C0C0",
+		"gray":      "#808080",
+		"grey":      "#808080",
+		"maroon":    "#800000",
+		"olive":     "#808000",
+		"green":     "#008000",
+		"purple":    "#800080",
+		"teal":      "#008080",
+		"navy":      "#000080",
+		"darkgray":  "#A9A9A9",
+		"darkgrey":  "#A9A9A9",
+		"lightgray": "#D3D3D3",
+		"lightgrey": "#D3D3D3",
+	}
 )
 
 type Processor struct {
@@ -29,223 +59,243 @@ func New(cfg *config.Config, info *ffprobe.VideoInfo) *Processor {
 
 // Run orchestrates the montage creation process.
 func (p *Processor) Run() error {
-	filterComplex, err := p.buildFilterComplex()
-	if err != nil {
-		return fmt.Errorf("failed to build filter_complex: %w", err)
-	}
-
-	args := []string{
-		"-hide_banner",
-		"-y",
-		"-i", p.VideoInfo.Path,
-		"-filter_complex", filterComplex,
-		"-map", "[v_out]",
-		"-q:v", fmt.Sprintf("%d", p.Config.JpegQuality),
-	}
-
-	// Add output-specific arguments. If output path is "-", stream to stdout.
-	if p.Config.OutputPath == "-" {
-		// The "mjpeg" format is suitable for streaming JPEG images to a pipe.
-		args = append(args, "-f", "mjpeg", "pipe:1")
-	} else {
-		// Otherwise, write to the specified file path.
-		args = append(args, p.Config.OutputPath)
-	}
-
-	cmd := exec.Command(p.Config.FfmpegPath, args...)
-
-	// Determine the output stream for application logs.
-	logWriter := os.Stdout
-	if p.Config.OutputPath == "-" {
-		logWriter = os.Stderr
-	}
-
-	if p.Config.Verbose {
-		fullCmd := p.Config.FfmpegPath + " " + strings.Join(args, " ")
-		fmt.Fprintln(logWriter, "\nExecuting FFmpeg command:")
-		fmt.Fprintln(logWriter, fullCmd)
-		fmt.Fprintln(logWriter)
-	}
-
-	var stderr bytes.Buffer
-	// If ffmpeg log is hidden, capture stderr for potential error reporting.
-	// Otherwise, stream it directly to the user's terminal (os.Stderr).
-	if !p.Config.ShowFfmpegLog {
-		cmd.Stderr = &stderr
-	} else {
-		// IMPORTANT: ffmpeg's stdout may be image data.
-		// Its progress/log output (which goes to its stderr) must go to our stderr.
-		cmd.Stderr = os.Stderr
-	}
-
-	// If output path is a file, ffmpeg writes to it directly.
-	// If output path is "-", we need to pipe ffmpeg's stdout to our stdout.
-	if p.Config.OutputPath == "-" {
-		cmd.Stdout = os.Stdout
-	}
-
-	err = cmd.Run()
-	if err != nil {
-		// If ffmpeg log was hidden and an error occurred, print the captured stderr.
-		if !p.Config.ShowFfmpegLog && stderr.Len() > 0 {
-			return fmt.Errorf("ffmpeg error: %v\n--- FFMPEG OUTPUT ---\n%s", err, stderr.String())
+	// Pre-calculate thumbnail dimensions, especially for auto-height.
+	thumbWidth := p.Config.ThumbWidth
+	thumbHeight := p.Config.ThumbHeight
+	if thumbHeight <= 0 {
+		// Ensure we don't divide by zero if video info is weird.
+		if p.VideoInfo.Height == 0 {
+			return fmt.Errorf("video height is 0, cannot auto-calculate thumbnail height")
 		}
-		return err
+		thumbHeight = int(float64(thumbWidth) / (float64(p.VideoInfo.Width) / float64(p.VideoInfo.Height)))
 	}
+
+	// 1. Calculate timestamps and extract frames in parallel into memory.
+	frames, timestamps, err := p.extractFrames(thumbWidth, thumbHeight)
+	if err != nil {
+		return fmt.Errorf("failed to extract frames: %w", err)
+	}
+
+	// 2. Compose the final image using gg.
+	err = p.composeMontage(frames, timestamps, thumbWidth, thumbHeight)
+	if err != nil {
+		return fmt.Errorf("failed to compose montage: %w", err)
+	}
+
 	return nil
 }
 
-func (p *Processor) buildFilterComplex() (string, error) {
-	var filters []string
-	currentStream := "[0:v]"
-
-	// 1. Trim video to 90% of duration to avoid intros/outros.
-	trimmedStream, trimmedDuration, trimFilter := p.buildTrimFilter(currentStream)
-	filters = append(filters, trimFilter)
-	currentStream = trimmedStream
-
-	// 2. Select frames and scale them.
-	framesStream, framesFilter := p.buildFramesFilter(currentStream, trimmedDuration)
-	filters = append(filters, framesFilter)
-	currentStream = framesStream
-
-	// 3. Add a border to each thumbnail if specified.
-	borderedStream, borderFilter := p.buildBorderFilter(currentStream)
-	if borderFilter != "" {
-		filters = append(filters, borderFilter)
-		currentStream = borderedStream
-	}
-
-	// 4. Tile the frames into a grid.
-	gridStream, tileFilter := p.buildTileFilter(currentStream)
-	filters = append(filters, tileFilter)
-	currentStream = gridStream
-
-	// 5. Pad the grid to add background, header, and margins.
-	paddedStream, padFilter, isPadded := p.buildPadFilter(currentStream)
-	filters = append(filters, padFilter)
-	if isPadded {
-		currentStream = paddedStream
-	}
-
-	// 6. Draw text if a font file is provided.
-	textFilters := p.buildTextFilters(currentStream)
-	filters = append(filters, textFilters...)
-
-	return strings.Join(filters, ";"), nil
-}
-
-// buildTrimFilter creates the filter to trim the video to 90% of its duration.
-func (p *Processor) buildTrimFilter(input string) (output string, duration float64, filter string) {
-	duration = p.VideoInfo.Duration * 0.9
-	start := p.VideoInfo.Duration * 0.05
-	output = "[trimmed]"
-	filter = fmt.Sprintf("%strim=start=%.4f:duration=%.4f,setpts=PTS-STARTPTS%s", input, start, duration, output)
-	return
-}
-
-// buildFramesFilter creates the filter to select and scale frames.
-func (p *Processor) buildFramesFilter(input string, duration float64) (output, filter string) {
+// extractFrames calculates timestamps and extracts video frames into memory.
+func (p *Processor) extractFrames(thumbWidth, thumbHeight int) ([]image.Image, []float64, error) {
 	numFrames := p.Config.Columns * p.Config.Rows
-	fps := float64(numFrames) / duration
-	output = "[frames]"
-	filter = fmt.Sprintf("%sfps=%.6f,scale=%d:%d%s", input, fps, p.Config.ThumbWidth, p.Config.ThumbHeight, output)
-	return
-}
-
-// buildBorderFilter creates the filter to add a border to each frame.
-func (p *Processor) buildBorderFilter(input string) (output, filter string) {
-	if p.Config.BorderThickness <= 0 {
-		return input, "" // Return original input stream and no filter
-	}
-	output = "[bordered_frames]"
-	filter = fmt.Sprintf(
-		"%sdrawbox=x=0:y=0:w=%d:h=%d:color=%s:t=%d%s",
-		input, p.Config.ThumbWidth, p.Config.ThumbHeight, p.Config.BorderColor, p.Config.BorderThickness, output,
-	)
-	return
-}
-
-// buildTileFilter creates the filter to arrange frames in a grid.
-func (p *Processor) buildTileFilter(input string) (output, filter string) {
-	output = "[grid]"
-	filter = fmt.Sprintf("%stile=%dx%d:padding=%d:margin=0%s", input, p.Config.Columns, p.Config.Rows, p.Config.Padding, output)
-	return
-}
-
-// buildPadFilter creates the filter to add padding, header, and background.
-func (p *Processor) buildPadFilter(input string) (output, filter string, wasPadded bool) {
-	output = "[padded_grid]"
-	if p.Config.FontFile == "" {
-		output = "[v_out]" // This is the final stream if no text is drawn
+	if numFrames <= 0 {
+		return nil, nil, fmt.Errorf("number of frames must be positive")
 	}
 
-	filter = fmt.Sprintf(
-		"%spad=width=iw+%d:height=ih+%d:x=%d:y=%d:color=%s%s",
-		input,
-		2*p.Config.Margin,
-		p.Config.HeaderHeight+2*p.Config.Margin,
-		p.Config.Margin,
-		p.Config.HeaderHeight+p.Config.Margin,
-		p.Config.BackgroundColor,
-		output,
-	)
-	wasPadded = true
-	return
-}
+	// Use 90% of the video duration, skipping the first and last 5%.
+	duration := p.VideoInfo.Duration * 0.9
+	startOffset := p.VideoInfo.Duration * 0.05
+	interval := duration / float64(numFrames)
 
-// buildTextFilters creates the filters for drawing all text elements.
-func (p *Processor) buildTextFilters(input string) []string {
-	if p.Config.FontFile == "" {
-		// If there's no font file, the input must be mapped to the output.
-		// However, buildPadFilter already handled this by naming its output [v_out].
-		return nil
+	frames := make([]image.Image, numFrames)
+	timestamps := make([]float64, numFrames)
+	var wg sync.WaitGroup
+	errs := make(chan error, numFrames)
+
+	for i := 0; i < numFrames; i++ {
+		wg.Add(1)
+		go func(frameIndex int) {
+			defer wg.Done()
+
+			timestamp := startOffset + (float64(frameIndex) * interval)
+			timestamps[frameIndex] = timestamp
+
+			// Use -ss before -i for fast seeking.
+			// Output jpeg to stdout via a pipe.
+			args := []string{
+				"-ss", fmt.Sprintf("%.4f", timestamp),
+				"-i", p.VideoInfo.Path,
+				"-vf", fmt.Sprintf("scale=%d:%d", thumbWidth, thumbHeight),
+				"-vframes", "1",
+				"-q:v", fmt.Sprintf("%d", p.Config.JpegQuality),
+				"-f", "image2pipe",
+				"-c:v", "mjpeg",
+				"pipe:1",
+			}
+
+			cmd := exec.Command(p.Config.FfmpegPath, args...)
+
+			var out bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &out
+			cmd.Stderr = &stderr
+
+			if err := cmd.Run(); err != nil {
+				errs <- fmt.Errorf("failed to extract frame %d: %w\n%s", frameIndex, err, stderr.String())
+				return
+			}
+
+			// Decode the image from the byte buffer.
+			img, _, err := image.Decode(&out)
+			if err != nil {
+				errs <- fmt.Errorf("failed to decode frame %d: %w", frameIndex, err)
+				return
+			}
+			frames[frameIndex] = img
+		}(i)
 	}
 
-	var textFilters []string
-	currentStream := input
-	escapedFontFile := strings.ReplaceAll(p.Config.FontFile, "\\", "/")
-	escapedFontFile = strings.ReplaceAll(escapedFontFile, ":", "\\\\:")
+	wg.Wait()
+	close(errs)
 
-	// Draw filename with dynamic font size to prevent overflow
+	// Check for any errors during frame extraction.
+	for err := range errs {
+		return nil, nil, err // Return on the first error.
+	}
+
+	return frames, timestamps, nil
+}
+
+// composeMontage creates the final image by arranging the extracted frames.
+func (p *Processor) composeMontage(frames []image.Image, timestamps []float64, thumbWidth, thumbHeight int) error {
+	// Dimensions are now passed in.
+	gridWidth := p.Config.Columns*thumbWidth + (p.Config.Columns-1)*p.Config.Padding
+	gridHeight := p.Config.Rows*thumbHeight + (p.Config.Rows-1)*p.Config.Padding
+
+	totalWidth := gridWidth + 2*p.Config.Margin
+	totalHeight := gridHeight + 2*p.Config.Margin + p.Config.HeaderHeight
+
+	dc := gg.NewContext(totalWidth, totalHeight)
+
+	// Draw background
+	bgColor, err := parseHexColor(p.Config.BackgroundColor)
+	if err != nil {
+		return fmt.Errorf("invalid background color: %w", err)
+	}
+	dc.SetColor(bgColor)
+	dc.Clear()
+
+	// Draw header text
+	if p.Config.FontFile != "" {
+		if err := p.drawText(dc, totalWidth); err != nil {
+			return fmt.Errorf("failed to draw text: %w", err)
+		}
+	}
+
+	// Prepare for drawing timestamps on frames
+	var timestampFontColor color.Color
+	var timestampShadowColor color.Color
+	if p.Config.FontFile != "" {
+		if err := dc.LoadFontFace(p.Config.FontFile, 18); err != nil {
+			return fmt.Errorf("could not load fontface for timestamp: %w", err)
+		}
+		timestampFontColor, _ = parseHexColor("white")
+		timestampShadowColor, _ = parseHexColor("black")
+	}
+
+	// Draw frames
+	for i, img := range frames {
+		if img == nil {
+			continue // Should not happen with current error handling, but good practice.
+		}
+
+		row := i / p.Config.Columns
+		col := i % p.Config.Columns
+
+		x := p.Config.Margin + col*(thumbWidth+p.Config.Padding)
+		y := p.Config.HeaderHeight + p.Config.Margin + row*(thumbHeight+p.Config.Padding)
+
+		dc.DrawImage(img, x, y)
+
+		// Draw timestamp on the frame if font is available
+		if p.Config.FontFile != "" {
+			timestampStr := formatDuration(timestamps[i])
+			// Position is relative to the image's top-left corner
+			textX := float64(x + 10)
+			textY := float64(y + thumbHeight - 15)
+
+			dc.SetColor(timestampShadowColor)
+			dc.DrawStringAnchored(timestampStr, textX+1, textY+1, 0, 1)
+			dc.SetColor(timestampFontColor)
+			dc.DrawStringAnchored(timestampStr, textX, textY, 0, 1)
+		}
+	}
+
+	// Save the final image
+	// The gg library's JPEG quality is 1-100 (higher is better),
+	// while ffmpeg's -q:v is 1-31 (lower is better). We'll do a rough conversion.
+	jpegQuality := 100 - (p.Config.JpegQuality-1)*3
+	if jpegQuality < 1 {
+		jpegQuality = 1
+	}
+	if jpegQuality > 100 {
+		jpegQuality = 100
+	}
+
+	if p.Config.OutputPath == "-" {
+		return jpeg.Encode(os.Stdout, dc.Image(), &jpeg.Options{Quality: jpegQuality})
+	} else {
+		return gg.SaveJPG(p.Config.OutputPath, dc.Image(), jpegQuality)
+	}
+}
+
+// drawText renders the header information onto the montage.
+func (p *Processor) drawText(dc *gg.Context, totalWidth int) error {
+	// Load font
+	if err := dc.LoadFontFace(p.Config.FontFile, 40); err != nil {
+		return fmt.Errorf("could not load fontface: %w", err)
+	}
+
+	// Shadow color
+	shadowColor, err := parseHexColor(p.Config.ShadowColor)
+	if err != nil {
+		return fmt.Errorf("invalid shadow color: %w", err)
+	}
+
+	// Font color
+	fontColor, err := parseHexColor(p.Config.FontColor)
+	if err != nil {
+		return fmt.Errorf("invalid font color: %w", err)
+	}
+
+	// --- Draw Filename ---
 	filename := filepath.Base(p.VideoInfo.Path)
-	filename = p.escapeFFmpegDrawtext(filename)
+	// Dynamically adjust font size to fit
+	fontSize := 40.0
+	for fontSize > 10 {
+		if err := dc.LoadFontFace(p.Config.FontFile, fontSize); err != nil {
+			return err
+		}
+		w, _ := dc.MeasureString(filename)
+		if w < float64(totalWidth)*0.9 {
+			break
+		}
+		fontSize -= 2
+	}
+	// Draw shadow then text
+	dc.SetColor(shadowColor)
+	dc.DrawStringAnchored(filename, float64(totalWidth)/2+2, 30+2, 0.5, 0.5)
+	dc.SetColor(fontColor)
+	dc.DrawStringAnchored(filename, float64(totalWidth)/2, 30, 0.5, 0.5)
 
-	// The fontsize expression dynamically scales the font to fit the width.
-	// `min(40, ...)` sets a max font size of 40.
-	// `(w*0.9/text_w)*40` scales the font down if the text (at size 40) is wider than 90% of the canvas.
-	filenameFontSize := "min(40, (w*0.9/text_w)*40)"
+	// --- Draw Metadata Line 1 ---
+	if err := dc.LoadFontFace(p.Config.FontFile, 20); err != nil {
+		return err
+	}
+	meta1 := p.formatMetadataLine1()
+	dc.SetColor(shadowColor)
+	dc.DrawStringAnchored(meta1, float64(totalWidth)/2+1, 80+1, 0.5, 0.5)
+	dc.SetColor(color.White) // A lighter color for metadata
+	dc.DrawStringAnchored(meta1, float64(totalWidth)/2, 80, 0.5, 0.5)
 
-	filenameFilter := p.drawTextFilterWithCustomFontsize(
-		filename, escapedFontFile, p.Config.FontColor, filenameFontSize,
-		"(w-tw)/2", "30",
-		currentStream, "[with_filename]",
-	)
-	textFilters = append(textFilters, filenameFilter)
-	currentStream = "[with_filename]"
+	// --- Draw Metadata Line 2 ---
+	meta2 := p.formatMetadataLine2()
+	dc.SetColor(shadowColor)
+	dc.DrawStringAnchored(meta2, float64(totalWidth)/2+1, 105+1, 0.5, 0.5)
+	dc.SetColor(color.White)
+	dc.DrawStringAnchored(meta2, float64(totalWidth)/2, 105, 0.5, 0.5)
 
-	// Draw metadata line 1
-	metadata1 := p.formatMetadataLine1()
-	metadata1 = p.escapeFFmpegDrawtext(metadata1)
-	meta1Filter := p.drawTextFilter(
-		metadata1, escapedFontFile, "#cccccc", 20,
-		"(w-tw)/2", "80",
-		currentStream, "[with_meta1]",
-	)
-	textFilters = append(textFilters, meta1Filter)
-	currentStream = "[with_meta1]"
-
-	// Draw metadata line 2
-	metadata2 := p.formatMetadataLine2()
-	metadata2 = p.escapeFFmpegDrawtext(metadata2)
-	meta2Filter := p.drawTextFilter(
-		metadata2, escapedFontFile, "#cccccc", 20,
-		"(w-tw)/2", "105",
-		currentStream, "[v_out]", // Final output stream
-	)
-	textFilters = append(textFilters, meta2Filter)
-
-	return textFilters
+	return nil
 }
 
 // formatMetadataLine1 generates the first line of metadata: Resolution | FPS | Bitrate
@@ -284,14 +334,7 @@ func (p *Processor) formatMetadataLine1() string {
 // formatMetadataLine2 generates the second line of metadata: Duration | File Size | Codecs
 func (p *Processor) formatMetadataLine2() string {
 	// Duration
-	d := time.Duration(p.VideoInfo.Duration * float64(time.Second))
-	d = d.Round(time.Second)
-	h := d / time.Hour
-	d -= h * time.Hour
-	m := d / time.Minute
-	d -= m * time.Minute
-	s := d / time.Second
-	durationStr := fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+	durationStr := formatDuration(p.VideoInfo.Duration)
 
 	// File size
 	sizeMB := float64(p.VideoInfo.FileSize) / (1024 * 1024)
@@ -306,27 +349,37 @@ func (p *Processor) formatMetadataLine2() string {
 	return fmt.Sprintf("%s | %s | %s", durationStr, sizeStr, codecs)
 }
 
-// escapeFFmpegDrawtext escapes characters that are special to ffmpeg's drawtext filter.
-func (p *Processor) escapeFFmpegDrawtext(text string) string {
-	// The characters ' \ : % need to be escaped with a backslash.
-	// We use a replacer for efficiency and correctness.
-	r := strings.NewReplacer(
-		"\\", "\\\\", // Backslash must be escaped first
-		"'", `\'`,
-		":", `\:`,
-		"%", `\%`,
-	)
-	return r.Replace(text)
+// formatDuration formats a float64 of seconds into an HH:MM:SS string.
+func formatDuration(seconds float64) string {
+	d := time.Duration(seconds * float64(time.Second))
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
-func (p *Processor) drawTextFilter(text, fontfile, color string, size int, x, y, input, output string) string {
-	fontSizeStr := fmt.Sprintf("%d", size)
-	return p.drawTextFilterWithCustomFontsize(text, fontfile, color, fontSizeStr, x, y, input, output)
-}
+// parseHexColor converts a hex color string (e.g., "#RRGGBB") to a color.Color.
+func parseHexColor(s string) (color.Color, error) {
+	s = strings.ToLower(s)
+	if hex, ok := colorNameToHex[s]; ok {
+		s = hex
+	}
 
-func (p *Processor) drawTextFilterWithCustomFontsize(text, fontfile, color, size, x, y, input, output string) string {
-	return fmt.Sprintf(
-		"%sdrawtext=fontfile='%s':text='%s':fontcolor=%s:fontsize='%s':x=%s:y=%s:shadowcolor=%s:shadowx=2:shadowy=2%s",
-		input, fontfile, text, color, size, x, y, p.Config.ShadowColor, output,
-	)
+	s = strings.TrimPrefix(s, "#")
+	if len(s) != 6 {
+		return color.Black, fmt.Errorf("invalid hex color format or unsupported color name: %s", s)
+	}
+	c, err := strconv.ParseInt(s, 16, 32)
+	if err != nil {
+		return color.Black, fmt.Errorf("failed to parse hex color: %w", err)
+	}
+	return color.RGBA{
+		R: uint8(c >> 16),
+		G: uint8(c >> 8),
+		B: uint8(c),
+		A: 255,
+	}, nil
 }

@@ -103,7 +103,7 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&cfg.ThumbHeight, "thumb-height", -1, "Height of each thumbnail. Defaults to -1 (auto-scale based on width and aspect ratio)")
 	rootCmd.PersistentFlags().IntVar(&cfg.Padding, "padding", 5, "Padding between thumbnails")
 	rootCmd.PersistentFlags().IntVar(&cfg.Margin, "margin", 20, "Margin around the grid")
-	rootCmd.PersistentFlags().IntVar(&cfg.HeaderHeight, "header", 150, "Height of the header section")
+	rootCmd.PersistentFlags().IntVar(&cfg.HeaderHeight, "header", 120, "Height of the header section")
 
 	rootCmd.PersistentFlags().StringVar(&cfg.FontFile, "font-file", "", "Path to a .ttf font file for text rendering. If not provided, text will not be rendered.")
 	rootCmd.PersistentFlags().StringVar(&cfg.FontColor, "font-color", "white", "Color of the main font")
@@ -112,8 +112,6 @@ func init() {
 
 	// New flags for quality and aesthetics
 	rootCmd.PersistentFlags().IntVar(&cfg.JpegQuality, "jpeg-quality", 2, "JPEG quality for the output image (1-31, lower is better)")
-	rootCmd.PersistentFlags().IntVar(&cfg.BorderThickness, "border-thickness", 1, "Thickness of the border around each thumbnail")
-	rootCmd.PersistentFlags().StringVar(&cfg.BorderColor, "border-color", "#111111", "Color of the border around each thumbnail")
 
 	// Paths for external binaries
 	rootCmd.PersistentFlags().StringVar(&cfg.FfmpegPath, "ffmpeg-path", "ffmpeg", "Path to the ffmpeg executable")

@@ -16,8 +16,6 @@ type Config struct {
 	ShadowColor     string
 	BackgroundColor string
 	JpegQuality     int
-	BorderThickness int
-	BorderColor     string
 	FfmpegPath      string
 	FfprobePath     string
 	Quiet           bool
