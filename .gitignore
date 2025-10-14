@@ -9,6 +9,3 @@
 
 # OS-specific files
 .DS_Store
-
-# Test outputs (but keep videos for LFS)
-tests/outputs/
