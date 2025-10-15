@@ -5,6 +5,7 @@ go 1.24.3
 require (
 	github.com/fogleman/gg v1.3.0
 	github.com/spf13/cobra v1.10.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

@@ -1,12 +1,14 @@
 #!/bin/bash
 #
 # This script compiles the MontageGo application for Windows, Linux, and macOS.
+# It also copies the example config into the build output directory.
 #
 
 echo "🚀 Starting cross-platform build process for MontageGo..."
 
 # Define the output directory for the binaries
 OUTPUT_DIR="builds"
+EXAMPLE_CFG="examples/config.sample.yaml"
 
 # Create the output directory if it doesn't exist, and clear its contents
 rm -rf "$OUTPUT_DIR"
@@ -52,6 +54,14 @@ do
     fi
 done
 
+# Copy example config into builds directory
+if [ -f "$EXAMPLE_CFG" ]; then
+    cp "$EXAMPLE_CFG" "$OUTPUT_DIR/config.sample.yaml"
+    echo "📄 Copied example config to $OUTPUT_DIR/config.sample.yaml"
+else
+    echo "⚠️  Warning: Example config not found at $EXAMPLE_CFG"
+fi
+
 echo ""
 echo "🎉 All builds finished!"
-echo "Binaries are located in the '$OUTPUT_DIR' directory."
+echo "Binaries and example config are located in the '$OUTPUT_DIR' directory."
