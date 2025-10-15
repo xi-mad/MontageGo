@@ -14,6 +14,7 @@ import (
 )
 
 var cfg *config.Config
+var configPath string
 
 var rootCmd = &cobra.Command{
 	Use:   "MontageGo [video_file]",
@@ -21,6 +22,15 @@ var rootCmd = &cobra.Command{
 	Long:  `MontageGo is a smart wrapper for FFmpeg to generate beautiful and informative thumbnail sheets for video files.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Load config file first (so CLI overrides it)
+		if configPath != "" {
+			fileCfg, err := config.Load(configPath)
+			if err != nil {
+				return fmt.Errorf("failed to load config file: %w", err)
+			}
+			mergeConfig(cmd, cfg, fileCfg)
+		}
+
 		if cfg.Quiet && cfg.Verbose {
 			return fmt.Errorf("flags --quiet and --verbose cannot be used together")
 		}
@@ -94,6 +104,9 @@ func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	cfg = config.NewConfig()
 
+	// Config file
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "Path to YAML config file")
+
 	// File and Path Flags
 	rootCmd.PersistentFlags().StringVarP(&cfg.OutputPath, "output", "o", "", "Output path. Use '-' to stream image data to stdout.")
 
@@ -122,4 +135,75 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&cfg.Verbose, "verbose", "v", false, "Enable verbose output, including the full ffmpeg command")
 	rootCmd.PersistentFlags().BoolVar(&cfg.ShowAppLog, "show-app-log", true, "Show application's own log messages (e.g., 'Analyzing...')")
 	rootCmd.PersistentFlags().BoolVar(&cfg.ShowFfmpegLog, "show-ffmpeg-log", true, "Show real-time output from the ffmpeg process")
+}
+
+// mergeConfig applies values from fileCfg into cfg for flags that were not explicitly set on CLI.
+func mergeConfig(cmd *cobra.Command, cfg *config.Config, fileCfg *config.Config) {
+	set := func(name string) bool {
+		changed, _ := cmd.Flags().GetBool("--dummy")
+		_ = changed
+		return cmd.Flags().Changed(name)
+	}
+
+	if !set("output") {
+		cfg.OutputPath = fileCfg.OutputPath
+	}
+	if !set("columns") {
+		cfg.Columns = fileCfg.Columns
+	}
+	if !set("rows") {
+		cfg.Rows = fileCfg.Rows
+	}
+	if !set("thumb-width") {
+		cfg.ThumbWidth = fileCfg.ThumbWidth
+	}
+	if !set("thumb-height") {
+		cfg.ThumbHeight = fileCfg.ThumbHeight
+	}
+	if !set("padding") {
+		cfg.Padding = fileCfg.Padding
+	}
+	if !set("margin") {
+		cfg.Margin = fileCfg.Margin
+	}
+	if !set("header") {
+		cfg.HeaderHeight = fileCfg.HeaderHeight
+	}
+
+	if !set("font-file") {
+		cfg.FontFile = fileCfg.FontFile
+	}
+	if !set("font-color") {
+		cfg.FontColor = fileCfg.FontColor
+	}
+	if !set("shadow-color") {
+		cfg.ShadowColor = fileCfg.ShadowColor
+	}
+	if !set("bg-color") {
+		cfg.BackgroundColor = fileCfg.BackgroundColor
+	}
+
+	if !set("jpeg-quality") {
+		cfg.JpegQuality = fileCfg.JpegQuality
+	}
+
+	if !set("ffmpeg-path") {
+		cfg.FfmpegPath = fileCfg.FfmpegPath
+	}
+	if !set("ffprobe-path") {
+		cfg.FfprobePath = fileCfg.FfprobePath
+	}
+
+	if !set("quiet") {
+		cfg.Quiet = fileCfg.Quiet
+	}
+	if !set("verbose") {
+		cfg.Verbose = fileCfg.Verbose
+	}
+	if !set("show-app-log") {
+		cfg.ShowAppLog = fileCfg.ShowAppLog
+	}
+	if !set("show-ffmpeg-log") {
+		cfg.ShowFfmpegLog = fileCfg.ShowFfmpegLog
+	}
 }

@@ -5,7 +5,7 @@
 # 1. Validate the version format
 # 2. Create a git tag
 # 3. Build binaries for all platforms
-# 4. Create a GitHub release with the binaries
+# 4. Guide you to create a GitHub release with the build artifacts
 #
 # Usage: ./scripts/release.sh <version>
 # Example: ./scripts/release.sh v1.0.0
@@ -103,10 +103,14 @@ show_release_info() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo "Version: $version"
-    echo "Binaries location: $BUILDS_DIR/"
+    echo "Builds location: $BUILDS_DIR/"
     echo ""
-    echo "Generated binaries:"
+    echo "Generated artifacts (upload these to the GitHub Release):"
     ls -lh "$BUILDS_DIR"
+    echo ""
+    echo "Includes:"
+    echo "  - Per-platform binaries (MontageGo-<os>-<arch>[.exe])"
+    echo "  - config.sample.yaml"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Next steps:"
@@ -118,7 +122,7 @@ show_release_info() {
     echo "2. Create a GitHub Release:"
     echo "   - Go to: https://github.com/xi-mad/MontageGo/releases/new"
     echo "   - Select tag: $version"
-    echo "   - Upload binaries from: $BUILDS_DIR/"
+    echo "   - Upload files from: $BUILDS_DIR/"
     echo "   - Publish the release"
     echo ""
     echo "Or push the tag and GitHub will allow you to create a release from it."

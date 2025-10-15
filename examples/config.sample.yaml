@@ -1,0 +1,29 @@
+# MontageGo sample configuration
+# Copy this file as config.yaml and adjust values as needed.
+
+# Paths
+output_path: ""
+ffmpeg_path: "ffmpeg"
+ffprobe_path: "ffprobe"
+
+# Grid layout
+columns: 4
+rows: 5
+thumb_width: 480
+thumb_height: -1        # -1 means auto-calc height by aspect ratio
+padding: 8
+margin: 24
+header_height: 120
+
+# Appearance
+font_file: "/System/Library/Fonts/STHeiti Light.ttc"
+font_color: "white"
+shadow_color: "black"
+background_color: "#222222"
+jpeg_quality: 2         # 1-31 (lower is better quality)
+
+# Logging
+quiet: false
+verbose: false
+show_app_log: true
+show_ffmpeg_log: true
