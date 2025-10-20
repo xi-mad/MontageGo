@@ -86,6 +86,8 @@ func (p *Processor) Run() error {
 }
 
 // extractFrames calculates timestamps and extracts video frames into memory.
+// This new version uses a single ffmpeg process to extract all frames at once
+// for much better efficiency than spawning a process per frame.
 func (p *Processor) extractFrames(thumbWidth, thumbHeight int) ([]image.Image, []float64, error) {
 	numFrames := p.Config.Columns * p.Config.Rows
 	if numFrames <= 0 {
@@ -97,60 +99,116 @@ func (p *Processor) extractFrames(thumbWidth, thumbHeight int) ([]image.Image, [
 	startOffset := p.VideoInfo.Duration * 0.05
 	interval := duration / float64(numFrames)
 
-	frames := make([]image.Image, numFrames)
 	timestamps := make([]float64, numFrames)
+	for i := 0; i < numFrames; i++ {
+		timestamps[i] = startOffset + (float64(i) * interval)
+	}
+
+	// --- Efficient frame extraction using a single ffmpeg process ---
+
+	// 1. Get video FPS.
+	var fps float64 = 25.0 // Default if not found
+	if p.VideoInfo.AvgFrameRate != "" {
+		parts := strings.Split(p.VideoInfo.AvgFrameRate, "/")
+		if len(parts) == 2 {
+			if num, err := strconv.ParseFloat(parts[0], 64); err == nil {
+				if den, err := strconv.ParseFloat(parts[1], 64); err == nil && den != 0 {
+					fps = num / den
+				}
+			}
+		}
+	}
+
+	// 2. Generate the 'select' filter string based on frame numbers.
+	// We use -ss to seek, so timestamps for frames are relative to startOffset.
+	selectParts := make([]string, numFrames)
+	for i := 0; i < numFrames; i++ {
+		relativeTimestamp := float64(i) * interval
+		frameNumber := int(relativeTimestamp * fps)
+		// The comma in "eq(n,123)" must be escaped for the ffmpeg filter parser.
+		selectParts[i] = fmt.Sprintf("eq(n\\,%d)", frameNumber)
+	}
+	selectFilter := "select='" + strings.Join(selectParts, "+") + "'"
+
+	// 3. Construct the ffmpeg command.
+	// -ss is before -i for fast seeking.
+	// The output is a raw pipe of concatenated JPEG images.
+	args := []string{
+		"-ss", fmt.Sprintf("%.4f", startOffset),
+		"-i", p.VideoInfo.Path,
+		"-vf", fmt.Sprintf("%s,scale=%d:%d", selectFilter, thumbWidth, thumbHeight),
+		"-vframes", strconv.Itoa(numFrames),
+		"-q:v", fmt.Sprintf("%d", p.Config.JpegQuality),
+		"-f", "image2pipe",
+		"-c:v", "mjpeg",
+		"pipe:1",
+	}
+
+	cmd := exec.Command(p.Config.FfmpegPath, args...)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, nil, fmt.Errorf("failed to execute ffmpeg: %w\nStderr: %s", err, stderr.String())
+	}
+
+	// 4. Decode the concatenated JPEG stream from stdout.
+	imageData := out.Bytes()
+	jpegSOI := []byte{0xff, 0xd8} // Start of Image
+	jpegEOI := []byte{0xff, 0xd9} // End of Image
+
+	frames := make([]image.Image, numFrames)
 	var wg sync.WaitGroup
 	errs := make(chan error, numFrames)
 
-	for i := 0; i < numFrames; i++ {
+	searchPos := 0
+	frameIndex := 0
+
+	for frameIndex < numFrames {
+		// Find the start of the next JPEG image.
+		soi := bytes.Index(imageData[searchPos:], jpegSOI)
+		if soi == -1 {
+			break // No more images found.
+		}
+		soi += searchPos
+
+		// Find the end of this JPEG image.
+		eoi := bytes.Index(imageData[soi:], jpegEOI)
+		if eoi == -1 {
+			break // Incomplete image data.
+		}
+		eoi += soi
+
+		imgData := imageData[soi : eoi+2]
+		searchPos = eoi + 2
+
 		wg.Add(1)
-		go func(frameIndex int) {
+		go func(index int, data []byte) {
 			defer wg.Done()
-
-			timestamp := startOffset + (float64(frameIndex) * interval)
-			timestamps[frameIndex] = timestamp
-
-			// Use -ss before -i for fast seeking.
-			// Output jpeg to stdout via a pipe.
-			args := []string{
-				"-ss", fmt.Sprintf("%.4f", timestamp),
-				"-i", p.VideoInfo.Path,
-				"-vf", fmt.Sprintf("scale=%d:%d", thumbWidth, thumbHeight),
-				"-vframes", "1",
-				"-q:v", fmt.Sprintf("%d", p.Config.JpegQuality),
-				"-f", "image2pipe",
-				"-c:v", "mjpeg",
-				"pipe:1",
-			}
-
-			cmd := exec.Command(p.Config.FfmpegPath, args...)
-
-			var out bytes.Buffer
-			var stderr bytes.Buffer
-			cmd.Stdout = &out
-			cmd.Stderr = &stderr
-
-			if err := cmd.Run(); err != nil {
-				errs <- fmt.Errorf("failed to extract frame %d: %w\n%s", frameIndex, err, stderr.String())
-				return
-			}
-
-			// Decode the image from the byte buffer.
-			img, _, err := image.Decode(&out)
+			img, _, err := image.Decode(bytes.NewReader(data))
 			if err != nil {
-				errs <- fmt.Errorf("failed to decode frame %d: %w", frameIndex, err)
+				errs <- fmt.Errorf("failed to decode frame %d: %w", index, err)
 				return
 			}
-			frames[frameIndex] = img
-		}(i)
+			frames[index] = img
+		}(frameIndex, imgData)
+
+		frameIndex++
 	}
 
 	wg.Wait()
 	close(errs)
 
-	// Check for any errors during frame extraction.
+	// Check for any errors during decoding.
 	for err := range errs {
 		return nil, nil, err // Return on the first error.
+	}
+
+	// If we didn't find enough frames, it's an error.
+	if frameIndex != numFrames {
+		return nil, nil, fmt.Errorf("ffmpeg produced %d frames, but %d were expected. Stderr:\n%s", frameIndex, numFrames, stderr.String())
 	}
 
 	return frames, timestamps, nil
